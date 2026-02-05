@@ -1,0 +1,291 @@
+# Fast-Code-Runner
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Liquid Glass Code Runner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f2f2f7">
+
+<!-- PWA -->
+<link rel="manifest" href="data:application/manifest+json,{
+  &quot;name&quot;:&quot;Liquid Glass Code Runner&quot;,
+  &quot;short_name&quot;:&quot;Code Runner&quot;,
+  &quot;start_url&quot;:&quot;.&quot;,
+  &quot;display&quot;:&quot;standalone&quot;,
+  &quot;background_color&quot;:&quot;#f2f2f7&quot;,
+  &quot;theme_color&quot;:&quot;#f2f2f7&quot;
+}">
+
+<style>
+:root{
+  --glass:rgba(255,255,255,.7);
+  --border:rgba(255,255,255,.45);
+  --blur:22px;
+  --glassOpacity:.7;
+  --text:#1c1c1e;
+  --accent:#0a84ff;
+  --shadow:0 20px 40px rgba(0,0,0,.15);
+}
+
+*{box-sizing:border-box}
+
+body{
+  margin:0;
+  height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui;
+  background:linear-gradient(135deg,#e0f2fe,#f0fdf4);
+  background-size:cover;
+  background-position:center;
+  color:var(--text);
+}
+
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  backdrop-filter:blur(var(--blur)) saturate(1.25);
+  z-index:-1;
+}
+
+/* LOADING */
+#loading{
+  position:fixed;
+  inset:0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(255,255,255,.6);
+  backdrop-filter:blur(30px);
+  z-index:999;
+  transition:opacity .4s ease;
+}
+#loading.hidden{opacity:0;pointer-events:none}
+
+/* HEADER */
+header{
+  margin:12px;
+  padding:10px 14px;
+  display:flex;
+  gap:10px;
+  align-items:center;
+  background:rgba(255,255,255,var(--glassOpacity));
+  border:1px solid var(--border);
+  border-radius:18px;
+  box-shadow:var(--shadow);
+}
+
+button,select{
+  padding:8px 14px;
+  border-radius:12px;
+  border:1px solid rgba(0,0,0,.05);
+  background:rgba(255,255,255,.9);
+  font-weight:600;
+  cursor:pointer;
+}
+
+main{
+  margin:12px;
+  height:calc(100vh - 90px);
+  border-radius:24px;
+  overflow:hidden;
+  box-shadow:var(--shadow);
+  position:relative;
+}
+
+.panel{
+  position:absolute;
+  inset:0;
+  background:rgba(255,255,255,var(--glassOpacity));
+  backdrop-filter:blur(var(--blur));
+  opacity:0;
+  transform:translateX(30px);
+  pointer-events:none;
+  transition:.35s cubic-bezier(.4,0,.2,1);
+}
+
+.panel.active{
+  opacity:1;
+  transform:none;
+  pointer-events:auto;
+}
+
+#editor{height:100%}
+iframe{width:100%;height:100%;border:none;background:white}
+
+#console{
+  padding:14px;
+  font-size:13px;
+  white-space:pre-wrap;
+}
+
+.log{color:#0a7f00}
+.warn{color:#b45309}
+.error{color:#d70015}
+
+/* SETTINGS */
+#settings{
+  position:fixed;
+  inset:0;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  background:rgba(0,0,0,.3);
+}
+
+#settingsPanel{
+  width:320px;
+  padding:18px;
+  background:rgba(255,255,255,.8);
+  backdrop-filter:blur(25px);
+  border-radius:20px;
+  box-shadow:var(--shadow);
+}
+</style>
+</head>
+
+<body>
+
+<div id="loading">
+  <div>
+    <h2>Loading Editor…</h2>
+    <p id="loadStatus">Starting…</p>
+  </div>
+</div>
+
+<header>
+  <select id="lang">
+    <option value="html">HTML</option>
+    <option value="js">JavaScript</option>
+    <option value="py">Python</option>
+  </select>
+  <button onclick="run()">▶ Run</button>
+  <button onclick="show('editorPanel')">Editor</button>
+  <button onclick="show('previewPanel')">Preview</button>
+  <button onclick="show('consolePanel')">Console</button>
+  <button onclick="openSettings()">⚙️</button>
+</header>
+
+<main>
+  <div id="editorPanel" class="panel active"><div id="editor"></div></div>
+  <div id="previewPanel" class="panel"><iframe id="output"></iframe></div>
+  <div id="consolePanel" class="panel">
+    <div id="console"></div>
+    <button onclick="clearConsole()">Clear</button>
+  </div>
+</main>
+
+<div id="settings" onclick="if(event.target.id==='settings')settings.style.display='none'">
+  <div id="settingsPanel">
+    <h3>Settings</h3>
+    <input type="file" accept="image/*" onchange="bgFile(this)">
+    <input placeholder="Background image URL" onkeydown="if(event.key==='Enter')bgUrl(this.value)">
+    <label>Blur</label>
+    <input type="range" min="0" max="30" value="22" oninput="setBlur(this.value)">
+    <label>Glass</label>
+    <input type="range" min="0.4" max="0.9" step="0.05" value="0.7" oninput="setGlass(this.value)">
+    <button onclick="resetBg()">Reset</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+
+<script>
+const status=document.getElementById("loadStatus");
+const loading=document.getElementById("loading");
+const output=document.getElementById("output");
+const consoleDiv=document.getElementById("console");
+let editor,pyodideReady=false;
+
+function write(type,msg){
+  const d=document.createElement("div");
+  d.className=type;
+  d.textContent=msg;
+  consoleDiv.appendChild(d);
+  show("consolePanel");
+}
+
+function clearConsole(){consoleDiv.innerHTML=""}
+
+require.config({paths:{vs:"https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs"}});
+status.textContent="Loading editor…";
+require(["vs/editor/editor.main"],()=>{
+  editor=monaco.editor.create(document.getElementById("editor"),{
+    value:`<h1>Hello 🌊</h1>
+<script>
+console.log("Liquid Glass ready");
+</script>`,
+    language:"html",
+    theme:"vs",
+    automaticLayout:true
+  });
+  status.textContent="Loading Python…";
+  loadPyodide().then(p=>{
+    pyodide=p;
+    pyodideReady=true;
+    status.textContent="Ready!";
+    setTimeout(()=>loading.classList.add("hidden"),400);
+  });
+});
+
+function run(){
+  clearConsole();
+  const code=editor.getValue();
+  const lang=langSelect.value;
+
+  if(lang==="html"||lang==="js"){
+    output.srcdoc=`
+<script>
+["log","warn","error"].forEach(t=>{
+ const o=console[t];
+ console[t]=(...a)=>{parent.postMessage({type:t,msg:a.join(" ")}, "*");o(...a);}
+});
+try{${lang==="js"?code:""}}
+catch(e){parent.postMessage({type:"error",msg:e.toString()},"*")}
+<\/script>
+${lang==="html"?code:""}
+`;
+  }
+
+  if(lang==="py"){
+    if(!pyodideReady) return write("error","Python still loading");
+    pyodide.runPython(`
+from js import postMessage
+import sys,traceback
+class C:
+ def write(self,s):
+  if s.strip(): postMessage({"type":"log","msg":s},"*")
+ def flush(self): pass
+sys.stdout=C();sys.stderr=C()
+try:
+${code}
+except:
+ postMessage({"type":"error","msg":traceback.format_exc()},"*")
+`);
+  }
+}
+
+window.addEventListener("message",e=>{
+  if(e.data?.type) write(e.data.type,e.data.msg);
+});
+
+function show(id){
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+}
+
+function openSettings(){settings.style.display="flex"}
+function bgFile(i){const r=new FileReader();r.onload=e=>body.style.backgroundImage=`url(${e.target.result})`;r.readAsDataURL(i.files[0])}
+function bgUrl(u){body.style.backgroundImage=`url(${u})`}
+function resetBg(){body.style.backgroundImage=""}
+function setBlur(v){document.documentElement.style.setProperty("--blur",v+"px")}
+function setGlass(v){document.documentElement.style.setProperty("--glassOpacity",v)}
+
+window.addEventListener("keydown",e=>{
+ if((e.ctrlKey||e.metaKey)&&e.key==="Enter")run();
+});
+</script>
+
+</body>
+</html>
